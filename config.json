@@ -1,8 +1,0 @@
-{
-    "username": "<your bot username>",
-    "password": "<your password here>",
-    "userAgent": "A TLDR generator by <your real username here>",
-    "retrivePause": 10,
-    "replyPause": 300
-    "signature": "Please redirect anger to bot master <your real username here>."
-}

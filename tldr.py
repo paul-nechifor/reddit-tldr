@@ -1,9 +1,19 @@
 #!/usr/bin/env python2
 # coding: utf-8
 
-import json, time, re, random, traceback, htmlentitydefs
+import json
+import time
+import re
+import random
+import htmlentitydefs
+import traceback
+import sys
 from HTMLParser import HTMLParser
-import praw, ots
+
+import praw
+import ots
+from praw.helpers import comment_stream
+
 
 def escapeHtml(what):
     return HTMLParser.unescape.__func__(HTMLParser, what)
@@ -15,6 +25,9 @@ class CommentParser(HTMLParser):
         self.text = ''
     def handle_starttag(self, tag, attrs):
         self.tags.add(tag)
+    def handle_endtag(self, tag):
+        if tag == 'p':
+            self.text += '\n\n'
     def handle_data(self, data):
         self.text += data
     def handle_entityref(self, name):
@@ -28,107 +41,85 @@ class CommentParser(HTMLParser):
 class Client:
     def __init__(self, config):
         self.config = config
-        self.retrivePause = config['retrivePause']
+        self.summaryChars = config['summaryChars']
+        self.minimumChars = config['minimumChars']
         self.replyPause = config['replyPause']
+        self.allowedTags = set('div,p,i,em,b,strong'.split(','))
         self.reddit = praw.Reddit(config['userAgent'])
-        self.respondedTo = set()
-        self.lastResponded = 0
-        self.lastGoodComment = None
-        self.lastGoodReply = None
-        self.permitedTags = set('div,p,i,em,b,strong'.split(','))
-
+        self.commentList = []
+        self.lastReplyTime = 0
 
     def start(self):
         self.reddit.login(self.config['username'], self.config['password'])
-
-        self.loop()
-
-    def loop(self):
         while True:
             try:
-                comments = self.reddit.get_comments('all', limit=None)
-            except:
-                traceback.print_exc()
+                for comment in comment_stream(self.reddit, 'all'):
+                    self.processComment(comment)
+            except KeyboardInterrupt:
                 return
-
-            try:
-                self.checkComments(comments)
             except:
-                print "A problem commenting..."
+                traceback.print_exc()
+                time.sleep(15)
+
+    def processComment(self, comment):
+        plainText = self.getCommentAsGood(comment)
+        if plainText is None:
+            return
+
+        self.commentList.append((len(plainText), comment, plainText))
+
+        diff = time.time() - self.lastReplyTime
+        if diff > self.replyPause and len(self.commentList) > 0:
+            best = max(self.commentList, key=lambda x: x[0])
+            self.commentList = []
+            chars, comment, plainText = best
+            replyText = self.getReplyFor(plainText)
+            try:
+                comment.reply(replyText)
+                print replyText
+                self.lastReplyTime = time.time()
+            except:
                 traceback.print_exc()
 
-            self.tryToSendAReply()
+    def getCommentAsGood(self, comment):
+        try:
+            html = escapeHtml(comment.body_html)
+            cp = CommentParser()
+            cp.feed(html)
+        except:
+            traceback.print_exc()
+            print 'This is bad. I should fix it.', comment.body_html
+            return None
 
-            time.sleep(self.retrivePause)
-
-    def checkComments(self, comments):
-        for comment in comments:
-            if comment.id in self.respondedTo:
-                continue
-            clean = self.commentIsGood(comment)
-            if clean != None:
-                print clean
-                print '\n'
-
-                self.lastGoodComment = comment
-                self.lastGoodReply = self.getReplyFor(clean)
-                break
-
-    def commentIsGood(self, comment):
-        html = escapeHtml(comment.body_html)
-
-        cp = CommentParser()
-        cp.feed(html)
-
-        if len(cp.text) < 4000:
+        if len(cp.text) < self.minimumChars:
             return None
 
         for tag in cp.tags:
-            if tag not in self.permitedTags:
+            if tag not in self.allowedTags:
                 return None
         
         return cp.text
 
+    def getSummary(self, text):
+        o = ots.OTS()
+        o.percentage = int(self.summaryChars * 100.0 / len(text))
+        o.parseUnicode(text)    
+        summary = ''
+        for sentence, good in o.hilite():
+            if good == 1:
+                summary += '* ' + sentence.replace('\n', '') + '\n'
+        return summary
+
     def getReplyFor(self, text):
-        ret = 'Computer generated TLDR:\n\n'
-        summary = self.getSummary(text)
-        print '#' * 80
-        print summary
-        print '#' * 80
-        for line in summary.split('\n'):
-            ret += '>' + line + '\n'
+        ret = 'Computer generated TL;DR:\n\n'
+        ret += unicode(self.getSummary(text), 'utf-8') 
         ret += '\n\n' + self.config['signature']
         return ret
 
-    def getSummary(self, text):
-        letters = 900
-        per = int(letters * 100.0 / len(text))
-
-        o = ots.OTS()
-        o.percentage = per
-        o.parseUnicode(text)    
-        return o.__str__()
-
-    def tryToSendAReply(self):
-        pausePassed = time.time() - self.lastResponded >= self.replyPause
-        goodCommentExists = self.lastGoodComment != None
-
-        if goodCommentExists and pausePassed:
-            try:
-                self.lastGoodComment.reply(self.lastGoodReply)
-            except:
-                print 'Problem replying. Abandoning this reply.'
-                traceback.print_exc()
-                
-            self.respondedTo.add(self.lastGoodComment.id)
-            self.lastGoodComment = None
-            self.lastResponded = time.time()
-
 def main():
     config = json.loads(open('config.json').read())
-
-    c = Client(config)
-    c.start()
+    client = Client(config)
+    client.start()
 
 if __name__ == '__main__':
     main()
