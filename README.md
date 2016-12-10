@@ -12,6 +12,7 @@ You need to install `praw` (for the Reddit API) and `ots` (for summarization).
     pip install praw
     
 To install ots, do the following :
+    
     sudo apt-get install libots
 
     sudo apt-get install libots-dev
