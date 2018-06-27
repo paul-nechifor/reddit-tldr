@@ -1,3 +1,7 @@
+# This repository has been moved to [gitlab.com/paul-nechifor/reddit-tldr](http://gitlab.com/paul-nechifor/reddit-tldr).
+
+Old readme:
+
 reddit-tldr
 ===========
 
